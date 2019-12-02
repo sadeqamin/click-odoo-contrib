@@ -14,7 +14,7 @@ import click
 import click_odoo
 from click_odoo import odoo
 
-from ._dbutils import db_exists
+from ._dbutils import db_exists, db_initialized
 from .manifest import expand_dependencies
 from .update import _save_installed_checksums
 
@@ -67,7 +67,12 @@ def _patch_ir_attachment_store(force_db_storage):
 
 def odoo_createdb(dbname, demo, module_names, force_db_storage):
     with _patch_ir_attachment_store(force_db_storage):
-        odoo.service.db._create_empty_database(dbname)
+        try:
+            odoo.service.db._create_empty_database(dbname)
+        except odoo.service.db.DatabaseExists:
+            if db_initialized(dbname):
+                # Why are you creating a DB that exists and is initialized?
+                raise
         odoo.tools.config["init"] = dict.fromkeys(module_names, 1)
         odoo.tools.config["without_demo"] = not demo
         if _odoo_version < odoo.tools.parse_version("10"):
@@ -391,6 +396,11 @@ class DbCache:
     is_flag=True,
     help="Don't report error if database already exists.",
 )
+@click.option(
+    "--unless-initialized",
+    is_flag=True,
+    help="Don't report error if database is already initialized.",
+)
 def main(
     env,
     new_database,
@@ -401,6 +411,7 @@ def main(
     cache_max_age,
     cache_max_size,
     unless_exists,
+    unless_initialized,
 ):
     """ Create an Odoo database with pre-installed modules.
 
@@ -417,6 +428,10 @@ def main(
         check_dbname(new_database)
     if unless_exists and db_exists(new_database):
         msg = "Database already exists: {}".format(new_database)
+        click.echo(click.style(msg, fg="yellow"))
+        return
+    if unless_initialized and db_initialized(new_database):
+        msg = "Database already initialized: {}".format(new_database)
         click.echo(click.style(msg, fg="yellow"))
         return
     module_names = [m.strip() for m in modules.split(",")]
